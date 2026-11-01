@@ -1,31 +1,116 @@
 # Reply Integrity
 
-A MaiBot SDK extension that preserves Planner instructions and recent tool observations, then sends the Replier's text as one message. It uses three public hooks and requires MaiBot 1.3.19+, SDK 2.20+, and Context Item schema v1.
+[English](README.en.md)
 
-- `maisaka.planner.before_request` captures up to four recent tool outputs from the selected Planner context. Reply receipts are excluded.
-- `maisaka.replyer.before_model_request` adds a system policy and a separate `<planner_instruction_and_facts>` block containing the current reply reference, legacy reason, and relevant recent observations.
-- `maisaka.reply.before_post_process` skips text splitting, typo injection, bracket removal, and stock overflow replies. Existing attachments and normal delivery handling remain available.
+让 MaiBot 的回复器拿到事实，同时用自己的口吻说话。
 
-The plugin imports only the SDK and the Python standard library. It does not patch Host source files or replace Host functions. No capability grants or extra model calls are required.
+Reply Integrity 通过官方 SDK Hook 连接 Planner 与 Replier：保留回复意图和最近的工具结果，将后台记录放到聊天历史之前，并要求 Planner 提供要点而非代写台词。生成后的文本直接交给正常发送流程，避免被分句、错字处理或溢出兜底替换。
 
-Observations are kept only in memory, isolated by session, with at most 64 sessions and 12,000 characters per observation. Truncated data is marked. The cache is refreshed at each Planner request and cleared on unload. Existing history retained by MaiBot follows its own retention settings.
+## 适合解决什么问题
 
-## Installation
+- 搜索工具已经返回答案，回复器却缺少对应事实。
+- Planner 写了公文式草稿，回复器跟着照抄，聊天像在读报告。
+- 一句中英混排被空格切成几条气泡，或正常长回复被替换为固定兜底词。
 
-Copy this directory to `plugins/reply_integrity` and load it through the plugin manager. Enable the `local.reply-integrity` extension. The Host validates the required hooks during registration.
+插件不增加模型调用，不修改 MaiBot 核心文件，不需要额外 capability 授权。运行代码只依赖 SDK 和 Python 标准库。
 
-The global response post-processing switch can stay off as an additional safeguard. Disabling or unloading this plugin removes its prompt policy and per-reply hook. Reloading the plugin clears its in-memory observation cache.
+## 用途示例
 
-## Tests
+以下均为虚构场景；口语输出是效果示意，不是固定模板或生成保证。
+
+**1. 把搜索事实交给回复器，而不是把报告当台词。**
+
+聊天：`找到那个项目的更新了吗？`
+
+Planner 参考可能原本写成：
+
+> 根据目前检索结果，建议向用户说明项目已发布 v2.4，并指引用户查阅发布说明。
+
+插件会在工具参数说明中要求 Planner 改用要点，例如：
+
+```text
+- 回复意图：告知更新
+- 版本：v2.4
+- 链接：https://example.org/releases/v2.4
+```
+
+回复器仍能看到工具事实，但可以自然表达成：
+
+> 找到了，已经到 v2.4 了，更新内容在这：https://example.org/releases/v2.4
+
+**2. 工具尚未完成时，保留真实状态。**
+
+工具返回 `pending` 时，插件提醒回复器说明还在等待。它不会把这个状态改成“没有搜到”，也不会凭空补出结果。适合回复成“还没回来，再等一下”。
+
+**3. 保留完整的中英混排。**
+
+```text
+你说的 demo 是 demo_maker 吗？
+```
+
+这句话作为一段文本进入正常发送流程，不会因为 `demo` 两侧的空格被再次分开。平台自身的长度限制仍然适用。
+
+## 安装与升级
+
+需要 MaiBot **1.3.19+**、`maibot-plugin-sdk` **2.20+**，以及 Context Item schema **v1**。已验证组合为 MaiBot 1.3.19 / SDK 2.20.0；其他版本需确认下列 Hook 和载荷仍兼容。
+
+1. 将本目录放到 MaiBot 实例的 `plugins/reply_integrity/`。
+2. 在插件管理器中加载或重载 **Reply Integrity**，ID 为 `local.reply-integrity`。
+3. 检查日志出现 `Reply Integrity 1.1.0 hooks active`。
+
+从 1.0.0 升级时覆盖同一目录即可。插件 ID 保持稳定，便于沿用启用状态。无需 API 密钥或额外配置。
+
+卸载或禁用插件会移除它的提示词与逐次回复处理规则。全局“回复后处理”开关属于 MaiBot 自身配置，插件不会替你修改它。
+
+## 如何工作
+
+| Hook | 作用 |
+| --- | --- |
+| `maisaka.planner.before_request` | 捕获最近四条非 `reply` 工具结果；仅改写 `reply_reference` 的参数说明，要求关键词、要点和事实。 |
+| `maisaka.replyer.before_request` | 将原始参考保存在本次调用的内部字段中，用临时标记避免宿主在历史末尾重复拼入草稿。重试时沿用同一份记录。 |
+| `maisaka.replyer.before_model_request` | 移除临时标记，把意图和事实块放在系统规则之后、聊天历史之前；常规聊天末尾追加一句简短口语提示。 |
+| `maisaka.reply.before_post_process` | 绕过文本分句、错字注入、括号清理和溢出兜底。保留附件及正常发送处理。 |
+
+常规聊天的请求顺序为：
+
+```text
+人设与系统规则 → Planner 意图和事实 → 原有聊天历史 → 当前回复要求 → 口语提示
+```
+
+聊天记录的内容、角色与相对顺序保持不变。口语规则只作用于 `maisaka.replyer` 常规聊天请求；插件 API 的文档生成不追加这套口语规则。即使在聊天中，明确要求的正式写作、引用、代码、名字、数字与链接也应保留。
+
+工具内容按不可信来源数据处理。XML 边界中的 `<` 会转义，系统规则明确禁止执行工具正文里的指令。插件不使用词语黑名单硬删“用户”“方案”等词。
+
+## 数据与限制
+
+- 工具结果只在内存缓存，按会话隔离，最多 64 个会话、每会话 4 条结果、每条 12,000 字符；截断会明确标记。每次 Planner 请求刷新缓存，卸载时清空。
+- 只包含 Planner 当前上下文可见的最近结果。新工具结果在下一次 Planner 请求时进入缓存；长结果可能丢失被截断部分。
+- 插件不新增落盘日志；宿主原有的提示词、推理记录和聊天历史仍按宿主设置保存。
+- Schema 描述与提示词是语言约束，无法保证模型始终遵守要点格式或某种口语风格。
+- 若其他插件随后修改同一提示词或回复，最终效果会受 Hook 顺序影响。
+- Hook 或 Context Item 协议变化需要适配。宿主默认会在 Hook 报错时跳过该处理器，应检查日志。
+- 不再自动拆分长回复；发送平台的长度限制仍可能导致发送失败。
+
+## 最小验证
 
 ```sh
 uv run --group dev pytest -q tests/test_plugin.py
 ```
 
-Run `tests/test_host_integration.py` in an isolated MaiBot source workspace with the application's dependencies. It checks actual Host Context Item deserialization and the normal reply post-processing entry point with the plugin's flags.
+5 个单元测试覆盖工具 Schema、提示顺序与重试、会话缓存边界、非法载荷和文档风格边界。
 
-## Compatibility
+另有 2 个宿主集成测试，需在具有 MaiBot 源码和依赖的隔离实例中运行：
 
-The plugin uses the SDK Hook contract rather than private `src.*` imports. An upgrade that removes a required hook or changes Context Item schema v1 requires a plugin update. The schema check reports unsupported versions explicitly. Recent observations become available after the next Planner request; guidance supplied directly in `reply_reference` remains available immediately.
+```sh
+python -m pytest -q tests
+```
 
-This is a private deployment package. No public distribution license is granted.
+集成测试执行真实提示词构建器、Context Item 反序列化及文本后处理入口。测试使用合成数据，不调用模型或发送消息。
+
+## 1.1.0
+
+新增 Planner/Replier 文风分离、工具参数说明约束和末尾口语提示；消除宿主重复参考块，保留重试及其他 Hook 参数。提供中文与英文说明。
+
+## 许可
+
+[MIT](LICENSE)

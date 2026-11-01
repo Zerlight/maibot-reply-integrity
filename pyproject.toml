@@ -1,6 +1,6 @@
 [project]
 name = "maibot-reply-integrity"
-version = "1.0.0"
+version = "1.1.0"
 description = "Preserve Planner facts and generated reply text through official MaiBot hooks."
 requires-python = ">=3.12"
 dependencies = ["maibot-plugin-sdk>=2.20.0,<3"]
