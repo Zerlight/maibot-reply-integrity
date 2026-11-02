@@ -1,4 +1,4 @@
-"""Preserve Planner facts and send the generated reply without text post-processing."""
+"""Preserve Planner facts and separate background notes from the Replier's voice."""
 
 from collections import OrderedDict
 from copy import deepcopy
@@ -43,7 +43,7 @@ class ReplySettings(PluginConfigBase):
     __ui_label__ = "回复完整性"
     __ui_i18n__ = {"en_US": {"title": "Reply Integrity"}}
 
-    config_version: str = Field(default="1.2.0", description="配置版本", json_schema_extra={"hidden": True})
+    config_version: str = Field(default="1.3.0", description="配置版本", json_schema_extra={"hidden": True})
     enabled: bool = Field(default=True, description="启用插件", json_schema_extra={
         "label": "启用插件", "i18n": {"en_US": {"label": "Enable plugin"}},
     })
@@ -52,9 +52,6 @@ class ReplySettings(PluginConfigBase):
     })
     separate_reply_style: bool = Field(default=True, strict=True, description="要求 Planner 提供要点，前置参考并追加口语提示。", json_schema_extra={
         "label": "隔离 Planner 文风", "i18n": {"en_US": {"label": "Separate reply style", "hint": "Request brief notes, move them before history and add a conversational cue."}},
-    })
-    bypass_post_processing: bool = Field(default=True, strict=True, description="保留生成原文；关闭后遵循宿主后处理设置。", json_schema_extra={
-        "label": "跳过文本后处理", "i18n": {"en_US": {"label": "Bypass text post-processing", "hint": "Preserve generated text; when off, follow the Host settings."}},
     })
     max_results: int = Field(default=4, ge=1, le=16, strict=True, description="每个会话注入的最近工具结果数（1–16）。", json_schema_extra={
         "label": "工具结果数量", "step": 1, "i18n": {"en_US": {"label": "Tool result count", "hint": "Recent results per session (1–16)."}},
@@ -104,7 +101,7 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
         self._facts: OrderedDict[str, list[dict]] = OrderedDict()
 
     async def on_load(self) -> None:
-        self.ctx.logger.info("Reply Integrity 1.2.1 hooks active")
+        self.ctx.logger.info("Reply Integrity 1.3.0 hooks active")
 
     async def on_unload(self) -> None:
         self._facts.clear()
@@ -223,16 +220,6 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
         return {"action": "continue", "modified_kwargs": {
             **kwargs, "items": updated, "item_schema_version": item_schema_version,
             "session_id": session_id, "reply_tool_args": reply_tool_args, "reply_reason": reply_reason,
-        }}
-
-    @HookHandler("maisaka.reply.before_post_process", name="preserve_generated_text",
-                 mode=HookMode.BLOCKING, order=HookOrder.LATE)
-    async def preserve_generated_text(self, **kwargs):
-        if not self.config.plugin.bypass_post_processing:
-            return {"action": "continue"}
-        return {"action": "continue", "modified_kwargs": {
-            **kwargs,
-            "skip_post_process": True, "enable_splitter": False, "enable_chinese_typo": False,
         }}
 
 

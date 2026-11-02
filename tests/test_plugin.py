@@ -5,6 +5,8 @@ import json
 
 import pytest
 
+from maibot_sdk.config import rebuild_plugin_config_data
+
 from plugin import (
     CHAT_CUE, MAX_SESSIONS, NOTES_KEY,
     REFERENCE_DESCRIPTION, STYLE_POLICY, ReplyConfig, text_item,
@@ -68,7 +70,7 @@ async def test_notes_are_before_history_and_retries_preserve_facts_without_mutat
     config = plugin.get_default_config()
     config["plugin"].update(inject_tool_facts=False, separate_reply_style=False)
     plugin.set_plugin_config(config)
-    await plugin.on_config_update("self", config, "1.2.0")
+    await plugin.on_config_update("self", config, "1.3.0")
     result = await plugin.inject_planner_facts(items, 1, "chat", prepared["reply_tool_args"], "Legacy reason")
     restored = result["modified_kwargs"]["items"]
     assert restored[:3] == items[:3] and restored[-1] == items[-1]
@@ -116,8 +118,20 @@ async def test_document_generation_keeps_its_requested_voice(plugin):
 @pytest.mark.asyncio
 async def test_settings_schema_validation_and_live_limits(plugin):
     fields = plugin.get_webui_config_schema()["sections"]["plugin"]["fields"]
-    for key in ("inject_tool_facts", "separate_reply_style", "bypass_post_processing"):
+    assert "bypass_post_processing" not in fields
+    assert {component["metadata"]["hook"] for component in plugin.get_components()} == {
+        "maisaka.planner.before_request", "maisaka.replyer.before_request", "maisaka.replyer.before_model_request",
+    }
+    for key in ("inject_tool_facts", "separate_reply_style"):
         assert fields[key]["type"] == "boolean" and fields[key]["default"] is True
+    legacy = {"plugin": {
+        "config_version": "1.2.0", "bypass_post_processing": True, "enabled": False,
+        "inject_tool_facts": False, "separate_reply_style": False, "max_results": 2, "max_result_chars": 5,
+    }}
+    migrated = rebuild_plugin_config_data(plugin.get_default_config(), legacy)
+    expected = {key: value for key, value in legacy["plugin"].items() if key != "bypass_post_processing"}
+    expected["config_version"] = "1.3.0"
+    assert ReplyConfig.model_validate(migrated).model_dump()["plugin"] == expected
     for key, default, maximum in (("max_results", 4, 16), ("max_result_chars", 12000, 48000)):
         assert (fields[key]["default"], fields[key]["min"], fields[key]["max"]) == (default, 1, maximum)
         for value in (0, maximum + 1, True, 1.5):
@@ -127,7 +141,7 @@ async def test_settings_schema_validation_and_live_limits(plugin):
     config = plugin.get_default_config()
     config["plugin"].update(max_results=2, max_result_chars=5)
     plugin.set_plugin_config(config)
-    await plugin.on_config_update("self", config, "1.2.0")
+    await plugin.on_config_update("self", config, "1.3.0")
     assert not plugin._facts
     await plugin.capture_tool_facts([tool_result("older"), tool_result("newest1"), tool_result("newest2")], 1, "chat")
     assert [f["content"] for f in plugin._facts["chat"]] == ["newes", "newes"]
@@ -142,11 +156,11 @@ async def test_feature_switches_are_independent(plugin):
         "reply_reference": {"description": "Original description"},
     }}}}]
     args = {"reply_reference": "Original reference"}
-    for facts, style, bypass in product((False, True), repeat=3):
+    for facts, style in product((False, True), repeat=2):
         config = plugin.get_default_config()
-        config["plugin"].update(inject_tool_facts=facts, separate_reply_style=style, bypass_post_processing=bypass)
+        config["plugin"].update(inject_tool_facts=facts, separate_reply_style=style)
         plugin.set_plugin_config(config)
-        await plugin.on_config_update("self", config, "1.2.0")
+        await plugin.on_config_update("self", config, "1.3.0")
         captured = await plugin.capture_tool_facts([tool_result("unique-fact")], 1, "chat", definitions)
         visible = captured.get("modified_kwargs", {}).get("tool_definitions", definitions)
         description = visible[0]["function"]["parameters"]["properties"]["reply_reference"]["description"]
@@ -164,8 +178,3 @@ async def test_feature_switches_are_independent(plugin):
             assert updated[-2:] == items
         if not facts and not style:
             assert captured == prepared == result == {"action": "continue"}
-        processed = await plugin.preserve_generated_text(response="Original text", enable_splitter=True)
-        assert processed == ({"action": "continue", "modified_kwargs": {
-            "response": "Original text", "skip_post_process": True,
-            "enable_splitter": False, "enable_chinese_typo": False,
-        }} if bypass else {"action": "continue"})

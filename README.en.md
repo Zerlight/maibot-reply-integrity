@@ -8,12 +8,12 @@
 
 **Give MaiBot's Replier the full facts—and strip away stiff "Agent-speak" so it can talk in its own natural voice.**
 
-In a dual-agent setup (**Planner + Replier**—for example, pairing a reasoning-focused **`gpt-6.1-sol` Planner** with an expressive **`gpt-4o-2024-11-20` Replier**), reply quality frequently suffers from two architectural failure modes: **cross-stage style & fact distortion** and **legacy scaffolding backfire**.
+In a dual-agent setup (**Planner + Replier**—for example, pairing a reasoning-focused **`gpt-6.1-sol` Planner** with an expressive **`gpt-4o-2024-11-20` Replier**), reply quality frequently suffers from two cross-stage failure modes: **missing tool facts** and **background style contamination**.
 
-Reply Integrity resolves both issues through official SDK hooks without touching MaiBot's core codebase:
+Reply Integrity addresses both issues through official SDK hooks without touching MaiBot's core codebase:
+
 - **Bridges the fact gap (fixes "brain–mouth split")**: Passes the conversational goal and recent tool observations directly to the Replier, complete with execution status, timestamps, and truncation markers.
 - **Stops unidirectional style contamination (eliminates "Agent-speak" / *A言gent语*)**: Instructs the Planner to jot down concise bullet points rather than a ready-to-send script, and moves background notes ahead of chat history so **recency bias** doesn't pull the Replier into echoing stiff internal "Agent-speak."
-- **Removes legacy post-processing crutches (prevents "scaffolding backfire")**: Sends the Replier's generated text straight to delivery, bypassing rule-based sentence splitting, typo injection, bracket stripping, and stock fallback replacements.
 
 The plugin requires **no extra model calls**, **no core source edits**, **no API keys**, and **no additional capability grants**. At runtime, it relies solely on the official MaiBot Plugin SDK and the Python standard library.
 
@@ -21,7 +21,7 @@ The plugin requires **no extra model calls**, **no core source edits**, **no API
 
 MaiBot separates **Planner (reasoning and tool execution)** from **Replier (persona and expression)**. Search results, reply references, chat history, and final outgoing text pass through distinct stages. When running capable model pairs like **`gpt-6.1-sol` (Planner) + `gpt-4o-2024-11-20` (Replier)**, problems that look like a poorly tuned persona typically stem from two underlying pipeline mechanisms:
 
-### 1. The Planner → Replier Dilemma: Disconnected Facts vs. "Agent-Speak" Contamination
+### The Planner → Replier Dilemma: Disconnected Facts vs. "Agent-Speak" Contamination
 
 ```mermaid
 flowchart TD
@@ -39,18 +39,11 @@ flowchart TD
 - **Brain–mouth split (missing facts between stages)**: MaiBot's standard reply path strips raw tool outputs from chat history. If the Planner's `reply_reference` omits a key detail or status, the Replier has to answer in the dark. Tweaking `Personality` or `Reply style` cannot restore facts that never reached the Replier.
 - **Unidirectional style contamination ("Agent-speak" / *A言gent语*)**: Reasoning-heavy Planners naturally formulate thoughts in compressed, bureaucratic machine prose (e.g., *"Based on current findings, advise the user that…"*). Because the Host appends that reference **after** chat history, right before generation, **recency bias** causes the Replier to lazily mirror the Planner's syntax and tone—turning a casual conversation into stiff "Agent-speak."
 
-### 2. "Scaffolding Backfire": When Legacy Crutches Break Capable Models
-
-Post-processing rules originally built as crutches for older, weaker models (such as regex splitters that chop sentences at spaces and hardcoded fallback pools) often backfire when paired with modern models that already handle pacing and mixed-language phrasing naturally:
-
-- **Rule-based splitters mutilate mixed-language sentences**: When Host splitting is enabled, spaces at Chinese/English boundaries can trigger unintended splits that chop a single coherent sentence into fragmented bubbles.
-- **Overflow fallbacks overwrite valid answers**: If character length or segment count crosses a threshold, a hardcoded fallback can discard a complete, accurate reply that the Replier already wrote and replace it with stock phrases like `懒得说` (*"can't be bothered"*) or `不晓得` (*"don't know"*).
-
-> **Troubleshooting Note:** These mechanisms have been verified against MaiBot 1.3.19's standard reply pipeline; whether they trigger depends on your configuration and input. **Seeing *"I don't know"* in chat does not by itself pinpoint the cause**—it could be honest uncertainty from the model, missing context between stages, or a post-processing fallback replacement. Always cross-check tool outputs, raw generated text, and final delivery logs.
+> **Troubleshooting Note:** **Seeing *"I don't know"* in chat does not by itself pinpoint the cause**—it could be honest uncertainty from the model or missing context between stages. Always cross-check tool outputs, raw generated text, and final delivery logs.
 
 ## Scenarios: Before & After
 
-*Note: The examples below are fictional illustrations, not raw chat logs. The "Without the plugin" column shows potential pipeline failure modes, while "With Reply Integrity" shows the intended conversational behavior rather than fixed templates or guaranteed model outputs. Post-processing comparisons assume the corresponding Host switches are enabled.*
+*Note: The examples below are fictional illustrations, not raw chat logs. The "Without the plugin" column shows potential pipeline failure modes, while "With Reply Integrity" shows the intended conversational behavior rather than fixed templates or guaranteed model outputs.*
 
 ### Scenario 1: Search found the facts, but chat sounds like "Agent-speak"
 
@@ -63,31 +56,16 @@ Post-processing rules originally built as crutches for older, weaker models (suc
 
 **How it helps:** Updating the tool parameter description nudges the Planner to write concise points, though prompts cannot deterministically prevent every full-sentence draft. Even when the Planner still writes a polished paragraph of "Agent-speak," the plugin moves it ahead of chat history and instructs the Replier to extract only the facts and intent while speaking in its own voice.
 
-### Scenario 2: A search is running (or finished), but the bot replies *"don't know"*
+### Scenario 2: A search is running (or finished), but the Replier cannot see its status
 
 Asynchronous MCP searches require distinguishing between a request that is still running and one that has already returned:
 
 | Actual state | Potential failure without the plugin | With Reply Integrity |
 | :--- | :--- | :--- |
 | **Tool returns `pending`** (the Planner knows the request is still running) | The reference omits the pending state, so the Replier has no idea a search is in progress and simply replies *"I don't know."* | Passes both the `pending` status and the waiting intent to the Replier, prompting an honest update: *"Still waiting on the results—give it a moment."* |
-| **Tool completed** (the Replier generated a full answer with links) | Segment-count overflow during post-processing discards the generated answer and replaces it with `懒得说` (*"can't be bothered"*) or `不晓得` (*"don't know"*). | Bypasses the overflow fallback and hands the generated answer intact to the delivery pipeline. |
+| **Tool completed** (returned a version number and release link) | The Planner reference says only "announce the update," omitting the version and link. | Injects the version and link from the tool output so the Replier can answer from the actual result. |
 
-**How it helps:** The second failure mode is a textbook case of scaffolding backfire—it looks as if the model is refusing to help, when in reality it wrote a complete answer that got overwritten before delivery. Reply Integrity preserves both upstream status and downstream text. (It does not speed up external tools themselves; `pending` tasks still require a subsequent check.)
-
-### Scenario 3: A single mixed-language sentence gets chopped into multiple bubbles
-
-Suppose the Replier generates the following sentence:
-
-```text
-我已经改查 OpenAI 的 demo，你说的 demo 是 demo_maker 吗？
-```
-
-| State | Delivered chat bubbles (illustrative) |
-| :--- | :--- |
-| **Without the plugin** (with rule-based splitting enabled) | **Bubble 1:** `我已经改查 OpenAI`<br>**Bubble 2:** `的 demo，你说的 demo`<br>**Bubble 3:** `是 demo_maker 吗？` |
-| **With Reply Integrity** | **Bubble 1:** `我已经改查 OpenAI 的 demo，你说的 demo 是 demo_maker 吗？` |
-
-**How it helps:** `maisaka.reply.before_post_process` skips text splitting, typo injection, and overflow replacement so the generated reply enters normal delivery as a single intact message. It does not fix errors written by the model itself, and platform message-length limits still apply.
+**How it helps:** The plugin passes through actual tool status and results. It does not speed up external tools themselves; `pending` tasks still require a subsequent check.
 
 ## Installation & Upgrades
 
@@ -103,26 +81,37 @@ Suppose the Replier generates the following sentence:
 
 1. Copy this directory into your MaiBot instance at `plugins/reply_integrity/`.
 2. Load or reload **Reply Integrity** in the plugin manager (plugin ID: `github.zerlight.reply-integrity`).
-3. Check the logs for `Reply Integrity 1.2.1 hooks active`.
+3. Check the logs for `Reply Integrity 1.3.0 hooks active`.
+
+### Recommended: Disable Host Response Post-Processing
+
+Turn off the global response post-processing switch in MaiBot WebUI, or set the following in the Host's `bot_config.toml`:
+
+```toml
+[response_post_process]
+enable_response_post_process = false
+```
+
+In MaiBot `1.3.19`, this switch returns generated text directly, skipping splitting, typo injection, bracket cleanup, and overflow fallbacks. Disabling only the splitter is not equivalent. This is a Host setting; the plugin does not change it. Long replies still remain subject to the chat platform's per-message length limit.
 
 ### Upgrading & Uninstalling
 
-- **Upgrading from 1.2.0 or earlier**: The old ID is `local.reply-integrity`; version 1.2.1 uses `github.zerlight.reply-integrity`. Stop MaiBot, back up and preserve the existing `config.toml`, overwrite the same `plugins/reply_integrity/` directory, then start MaiBot and check the new ID's enabled state. The Host treats the new ID as a different plugin; do not load both copies, which would process replies twice. The configuration schema stays at 1.2.0, so settings do not need to be re-entered.
-- **Disabling or unloading**: Unloading or disabling the plugin immediately removes its prompt injections and per-reply post-processing overrides. MaiBot's global response post-processing toggle remains untouched in your Host configuration.
+- **Upgrading from 1.2.0 or earlier**: The old ID is `local.reply-integrity`; version 1.2.1 uses `github.zerlight.reply-integrity`. Stop MaiBot, back up and preserve the existing `config.toml`, overwrite the same `plugins/reply_integrity/` directory, then start MaiBot and check the new ID's enabled state. The Host treats the new ID as a different plugin; do not load both copies, which would process replies twice.
+- **Upgrading to 1.3.0**: Configuration migration removes the old `bypass_post_processing` field and preserves other settings. Response post-processing now follows Host configuration entirely; if you previously relied on the plugin bypass, turn off the Host's global switch as described above.
+- **Disabling or unloading**: Stops prompt injection for subsequent requests and clears cached tool results without changing Host configuration.
 
 ## Settings
 
-Select **Reply Integrity** in MaiBot WebUI's plugin configuration page. The SDK generates the form and applies saved changes without restarting MaiBot. Defaults preserve the existing behavior.
+Select **Reply Integrity** in MaiBot WebUI's plugin configuration page. The SDK generates the form and applies saved changes without restarting MaiBot.
 
 | Setting in `[plugin]` | Default | Behavior |
 | :--- | :--- | :--- |
-| `inject_tool_facts` | `true` | Toggle capture and injection of recent raw tool results. |
+| `inject_tool_facts` | `true` | Toggle capture and injection of recent tool results visible to the current Planner request. |
 | `separate_reply_style` | `true` | Toggle Planner parameter guidance, reference placement and conversational cues. |
-| `bypass_post_processing` | `true` | Toggle text post-processing bypass. When off, follow Host settings; this does not enable the Host's global post-processing switch. |
 | `max_results` | `4` | Recent tool result count, **1–16**, excluding `reply` receipts. |
 | `max_result_chars` | `12000` | Characters per result, **1–48,000**; longer results are truncated and marked. |
 
-The three feature switches are independent. `enabled` controls the whole plugin, and the SDK manages `config_version`. Settings are stored in the plugin directory's `config.toml`. Updating plugin settings clears cached results; the next Planner request captures them with the new limits. Higher limits increase prompt size, token usage and memory use.
+The two feature switches are independent. `enabled` controls the whole plugin, and the SDK manages `config_version`. Settings are stored in the plugin directory's `config.toml`. Updating plugin settings clears cached results; the next Planner request captures them with the new limits. Higher limits increase prompt size, token usage and memory use.
 
 The mechanisms and examples below describe the default settings.
 
@@ -135,7 +124,6 @@ The mechanisms and examples below describe the default settings.
 | `maisaka.planner.before_request` | Captures up to 4 recent non-`reply` tool outputs from the active context and rewrites the `reply_reference` parameter description on the `reply` tool to ask for concise bullet points and core facts. |
 | `maisaka.replyer.before_request` | Stashes the original reference and reason in an internal per-call field and swaps in a one-time marker so the Host does not append the raw draft after chat history (preserving retry idempotency). |
 | `maisaka.replyer.before_model_request` | Strips the temporary marker, inserts the `<planner_instruction_and_facts>` block after system rules and before chat history, and appends a brief conversational cue at the end of normal chat requests. |
-| `maisaka.reply.before_post_process` | Sets `skip_post_process=True`, `enable_splitter=False`, and `enable_chinese_typo=False` to bypass splitting, typo injection, bracket cleanup, and stock overflow fallbacks while keeping attachments and standard delivery intact. |
 
 ### 2. Context Layout Comparison (Neutralizing Recency Bias)
 
@@ -157,22 +145,21 @@ By default, the Host places the Planner reference *after* chat history. Moving b
 ## Caching & Limitations
 
 - **In-memory session cache**: Tool observations are cached in memory per `session_id` (capped at **64 sessions**, **4 observations per session**, and **12,000 characters per observation**, with an explicit `"truncated": true` flag when clipped). Each Planner request refreshes that session's cache, and unloading the plugin clears all cached entries.
-- **Context visibility window**: Only recent tool outputs present in the Planner's current context are captured. Newly produced tool outputs enter the cache on the next Planner request, and details clipped beyond 12,000 characters are not available to the Replier.
+- **Context visibility window**: Only recent tool outputs present in the Planner's current context are captured. Newly produced outputs enter the cache on the next Planner request, so a result produced in the same tool batch may not reach the current `reply`. If the Host has already condensed a result, the plugin receives that condensed content. The `truncated` flag describes only the plugin's own character truncation; clipped details are not available to the Replier.
 - **Zero extra disk logging**: The plugin writes no persistent logs of its own; Host prompt traces, reasoning logs, and chat history continue to follow your Host retention settings.
 - **Prompt-level constraints**: Tool schema descriptions and system prompts guide model behavior but cannot mathematically guarantee bullet-point formatting or a specific speaking style on every turn.
 - **Hook execution order**: If other installed plugins modify the same prompt items or reply kwargs, the final behavior depends on hook execution order.
 - **Contract compatibility**: Future changes to Host hook signatures or Context Item schema versions will require plugin updates. Because the Host skips failing hook handlers by default, check your logs after upgrading MaiBot.
-- **Platform message limits**: Because automatic sentence splitting is bypassed, very long replies are sent as a single message and remain subject to your chat platform's maximum message length.
 
 ## Verification & Tests
 
-Run the standalone unit test suite (7 tests covering SDK settings validation, hot reload, independent switches, tool schema rewriting, prompt ordering & retry idempotency, session cache eviction & truncation bounds, invalid payload rejection, and non-chat style isolation):
+Run the standalone unit test suite (7 tests covering SDK settings validation and configuration migration, hot reload, independent switches, tool schema rewriting, prompt ordering & retry idempotency, session cache eviction & truncation bounds, invalid payload rejection, and non-chat style isolation):
 
 ```sh
 uv run --group dev pytest -q tests/test_plugin.py
 ```
 
-In an isolated MaiBot source environment with full Host dependencies installed, you can also run the 2 Host integration tests (which exercise the real prompt builder, Context Item deserializer, and text post-processing entry point):
+In an isolated MaiBot source environment with full Host dependencies installed, you can also run the 1 Host integration test (which exercises the real prompt builder and Context Item deserializer):
 
 ```sh
 python -m pytest -q tests
@@ -181,6 +168,11 @@ python -m pytest -q tests
 *All tests use synthetic fixtures and never invoke external models or send live messages.*
 
 ## Changelog
+
+### 1.3.0
+
+- Removed the response post-processing hook and switch; replies now follow Host settings. Added setup guidance for disabling the Host's global response post-processing switch.
+- Updated the configuration version to 1.3.0, removing the old field while preserving other settings during migration.
 
 ### 1.2.1
 

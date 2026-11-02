@@ -7,16 +7,7 @@ pytest.importorskip("src")
 from plugin import CHAT_CUE
 from src.chat.replyer.maisaka_generator_base import BaseMaisakaReplyGenerator
 from src.llm_models.payload_content.context_item import ContextItemBuilder, RoleType, get_item_text
-from src.maisaka.builtin_tool.context import BuiltinToolRuntimeContext
 from src.plugin_runtime.hook_payloads import deserialize_prompt_items, serialize_prompt_items
-
-
-@pytest.mark.asyncio
-async def test_host_sends_exact_text_without_splitting_or_overflow_fallback(plugin):
-    for text in ("我已经改查 OpenAI 的发布记录，等结果回来再确认", "你说的 demo 是 demo_maker 吗？", "中" * 1200):
-        change = await plugin.preserve_generated_text(response=text)
-        payload = change["modified_kwargs"]
-        assert BuiltinToolRuntimeContext.post_process_reply_text(payload.pop("response"), **payload) == [text]
 
 
 @pytest.mark.asyncio
