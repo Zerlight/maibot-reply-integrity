@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
-  "id": "local.reply-integrity",
-  "version": "1.2.0",
+  "id": "github.zerlight.reply-integrity",
+  "version": "1.2.1",
   "name": "Reply Integrity",
   "description": "保留 Planner 事实、隔离草稿文风，让回复器按聊天语气表达，并保留完整回复文本。",
   "author": {

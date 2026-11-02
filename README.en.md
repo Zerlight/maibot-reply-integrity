@@ -102,12 +102,12 @@ Suppose the Replier generates the following sentence:
 ### Setup Steps
 
 1. Copy this directory into your MaiBot instance at `plugins/reply_integrity/`.
-2. Load or reload **Reply Integrity** in the plugin manager (plugin ID: `local.reply-integrity`).
-3. Check the logs for `Reply Integrity 1.2.0 hooks active`.
+2. Load or reload **Reply Integrity** in the plugin manager (plugin ID: `github.zerlight.reply-integrity`).
+3. Check the logs for `Reply Integrity 1.2.1 hooks active`.
 
 ### Upgrading & Uninstalling
 
-- **Upgrading from 1.0.0**: Overwrite the existing `plugins/reply_integrity/` directory and reload. The plugin ID remains `local.reply-integrity`, so your enabled state carries over without extra configuration.
+- **Upgrading from 1.2.0 or earlier**: The old ID is `local.reply-integrity`; version 1.2.1 uses `github.zerlight.reply-integrity`. Stop MaiBot, back up and preserve the existing `config.toml`, overwrite the same `plugins/reply_integrity/` directory, then start MaiBot and check the new ID's enabled state. The Host treats the new ID as a different plugin; do not load both copies, which would process replies twice. The configuration schema stays at 1.2.0, so settings do not need to be re-entered.
 - **Disabling or unloading**: Unloading or disabling the plugin immediately removes its prompt injections and per-reply post-processing overrides. MaiBot's global response post-processing toggle remains untouched in your Host configuration.
 
 ## Settings
@@ -181,6 +181,10 @@ python -m pytest -q tests
 *All tests use synthetic fixtures and never invoke external models or send live messages.*
 
 ## Changelog
+
+### 1.2.1
+
+- Changed the plugin ID to `github.zerlight.reply-integrity` and documented installation and migration from the old ID. Functionality and the configuration format are unchanged.
 
 ### 1.2.0
 

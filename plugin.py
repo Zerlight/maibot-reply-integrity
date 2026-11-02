@@ -104,7 +104,7 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
         self._facts: OrderedDict[str, list[dict]] = OrderedDict()
 
     async def on_load(self) -> None:
-        self.ctx.logger.info("Reply Integrity 1.2.0 hooks active")
+        self.ctx.logger.info("Reply Integrity 1.2.1 hooks active")
 
     async def on_unload(self) -> None:
         self._facts.clear()

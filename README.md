@@ -102,12 +102,12 @@ flowchart TD
 ### 安装步骤
 
 1. 将本仓库目录放入 MaiBot 实例的 `plugins/reply_integrity/`。
-2. 在插件管理器中加载或重载 **Reply Integrity**（插件固定 ID 为 `local.reply-integrity`）。
-3. 查看运行日志，确认出现 `Reply Integrity 1.2.0 hooks active`。
+2. 在插件管理器中加载或重载 **Reply Integrity**（插件固定 ID 为 `github.zerlight.reply-integrity`）。
+3. 查看运行日志，确认出现 `Reply Integrity 1.2.1 hooks active`。
 
 ### 升级与卸载
 
-- **从 1.0.0 升级**：直接覆盖 `plugins/reply_integrity/` 目录并重载插件即可。插件 ID 保持不变，原有启用状态会自动沿用。
+- **从 1.2.0 及更早版本升级**：旧 ID 为 `local.reply-integrity`，1.2.1 起使用 `github.zerlight.reply-integrity`。停止 MaiBot，备份并保留原目录的 `config.toml`，用新版覆盖同一个 `plugins/reply_integrity/` 目录，再启动 MaiBot 并确认新 ID 的启用状态。宿主会将新 ID 识别为不同插件；不要同时加载新旧两份插件，以免重复处理回复。配置结构保持 1.2.0，不需要重填设置。
 - **禁用或卸载**：卸载或禁用插件后，其注入的提示词与单次回复后处理接管立即失效。宿主自身的全局“回复后处理”配置项完全独立，插件不会修改你的宿主配置文件。
 
 ## 设置
@@ -181,6 +181,10 @@ python -m pytest -q tests
 *所有测试均使用合成数据，不会发起真实模型调用或向外发送消息。*
 
 ## 更新记录
+
+### 1.2.1
+
+- 插件 ID 更改为 `github.zerlight.reply-integrity`，更新安装与旧 ID 迁移说明。功能与配置格式不变。
 
 ### 1.2.0
 
