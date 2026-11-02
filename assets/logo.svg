@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Reply Integrity</title>
+  <desc id="desc">Two streams of information enter one complete speech bubble.</desc>
+  <rect width="512" height="512" rx="112" fill="#163B35"/>
+  <path d="M200 112h168a56 56 0 0 1 56 56v136a56 56 0 0 1-56 56H248l-64 56v-58a56 56 0 0 1-40-54V168a56 56 0 0 1 56-56Z" fill="#F4F5E9"/>
+  <path d="M80 204h64m-64 64h64" fill="none" stroke="#8DE1B5" stroke-width="24" stroke-linecap="round"/>
+  <path d="M208 204h144m-144 64h104" fill="none" stroke="#163B35" stroke-width="24" stroke-linecap="round"/>
+</svg>

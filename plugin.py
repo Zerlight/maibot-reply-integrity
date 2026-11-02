@@ -8,7 +8,7 @@ from uuid import uuid4
 import json
 import re
 
-from maibot_sdk import HookHandler, MaiBotPlugin
+from maibot_sdk import Field, HookHandler, MaiBotPlugin, PluginConfigBase
 from maibot_sdk.types import HookMode, HookOrder
 
 
@@ -37,8 +37,35 @@ NOTES_REMINDER = (
 CHAT_CUE = "接着刚才的话自然聊，按你自己的口吻直接说；别复述后台记录，也别把它当成台词。"
 NOTES_KEY = "_reply_integrity_notes"
 MAX_SESSIONS = 64
-MAX_RESULTS = 4
-MAX_RESULT_CHARS = 12000
+
+
+class ReplySettings(PluginConfigBase):
+    __ui_label__ = "回复完整性"
+    __ui_i18n__ = {"en_US": {"title": "Reply Integrity"}}
+
+    config_version: str = Field(default="1.2.0", description="配置版本", json_schema_extra={"hidden": True})
+    enabled: bool = Field(default=True, description="启用插件", json_schema_extra={
+        "label": "启用插件", "i18n": {"en_US": {"label": "Enable plugin"}},
+    })
+    inject_tool_facts: bool = Field(default=True, strict=True, description="将最近的工具结果传给回复器。", json_schema_extra={
+        "label": "注入工具事实", "i18n": {"en_US": {"label": "Inject tool facts", "hint": "Pass recent tool results to the Replier."}},
+    })
+    separate_reply_style: bool = Field(default=True, strict=True, description="要求 Planner 提供要点，前置参考并追加口语提示。", json_schema_extra={
+        "label": "隔离 Planner 文风", "i18n": {"en_US": {"label": "Separate reply style", "hint": "Request brief notes, move them before history and add a conversational cue."}},
+    })
+    bypass_post_processing: bool = Field(default=True, strict=True, description="保留生成原文；关闭后遵循宿主后处理设置。", json_schema_extra={
+        "label": "跳过文本后处理", "i18n": {"en_US": {"label": "Bypass text post-processing", "hint": "Preserve generated text; when off, follow the Host settings."}},
+    })
+    max_results: int = Field(default=4, ge=1, le=16, strict=True, description="每个会话注入的最近工具结果数（1–16）。", json_schema_extra={
+        "label": "工具结果数量", "step": 1, "i18n": {"en_US": {"label": "Tool result count", "hint": "Recent results per session (1–16)."}},
+    })
+    max_result_chars: int = Field(default=12000, ge=1, le=48000, strict=True, description="每条工具结果的字符上限（1–48,000），超出部分截断。", json_schema_extra={
+        "label": "单条结果字符上限", "step": 1, "i18n": {"en_US": {"label": "Characters per result", "hint": "Truncate each result at this limit (1–48,000 characters)."}},
+    })
+
+
+class ReplyConfig(PluginConfigBase):
+    plugin: ReplySettings = Field(default_factory=ReplySettings)
 
 
 def text_item(item_type: str, text: str) -> dict:
@@ -70,18 +97,21 @@ def read_notes(args: dict) -> dict | None:
 
 
 class ReplyIntegrityPlugin(MaiBotPlugin):
+    config_model = ReplyConfig
+
     def __init__(self):
         super().__init__()
         self._facts: OrderedDict[str, list[dict]] = OrderedDict()
 
     async def on_load(self) -> None:
-        self.ctx.logger.info("Reply Integrity 1.1.0 hooks active")
+        self.ctx.logger.info("Reply Integrity 1.2.0 hooks active")
 
     async def on_unload(self) -> None:
         self._facts.clear()
 
     async def on_config_update(self, scope: str, config_data: dict, version: str) -> None:
-        return None
+        if scope == "self":
+            self._facts.clear()
 
     @HookHandler("maisaka.planner.before_request", name="capture_tool_facts",
                  mode=HookMode.BLOCKING, order=HookOrder.LATE)
@@ -89,11 +119,14 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
         self, items: list, item_schema_version: int, session_id: str,
         tool_definitions: list | None = None, **kwargs,
     ):
+        settings = self.config.plugin
+        if not settings.inject_tool_facts and not settings.separate_reply_style:
+            return {"action": "continue"}
         check_items(items, item_schema_version)
         if not session_id:
             raise ValueError("A session ID is required")
         facts = []
-        for item in reversed(items):
+        for item in reversed(items) if settings.inject_tool_facts else ():
             if item.get("item_type") != "FunctionCallOutputItem" or item.get("tool_name") == "reply":
                 continue
             output = item.get("output")
@@ -102,9 +135,9 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
             facts.append({
                 "tool": item.get("tool_name", ""), "call_id": item.get("call_id", ""),
                 "timestamp": item.get("meta", {}).get("timestamp"), "success": item.get("success"),
-                "content": output[:MAX_RESULT_CHARS], "truncated": len(output) > MAX_RESULT_CHARS,
+                "content": output[:settings.max_result_chars], "truncated": len(output) > settings.max_result_chars,
             })
-            if len(facts) == MAX_RESULTS:
+            if len(facts) == settings.max_results:
                 break
         self._facts[session_id] = list(reversed(facts))
         self._facts.move_to_end(session_id)
@@ -113,7 +146,7 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
         definitions = deepcopy(tool_definitions or [])
         for definition in definitions:
             function = definition.get("function", {})
-            if function.get("name") == "reply":
+            if settings.separate_reply_style and function.get("name") == "reply":
                 function["parameters"]["properties"]["reply_reference"]["description"] = REFERENCE_DESCRIPTION
         return {"action": "continue", "modified_kwargs": {
             **kwargs, "items": items, "item_schema_version": item_schema_version,
@@ -123,7 +156,7 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
     @HookHandler("maisaka.replyer.before_request", name="isolate_planner_notes",
                  mode=HookMode.BLOCKING, order=HookOrder.LATE)
     async def isolate_planner_notes(self, reply_tool_args: dict | None = None, reply_reason: str = "", **kwargs):
-        if kwargs.get("request_type", "maisaka.replyer") != "maisaka.replyer":
+        if not self.config.plugin.separate_reply_style or kwargs.get("request_type", "maisaka.replyer") != "maisaka.replyer":
             return {"action": "continue"}
         args = deepcopy(reply_tool_args or {})
         reference = args.get("reply_reference", "")
@@ -145,18 +178,21 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
         self, items: list, item_schema_version: int, session_id: str,
         reply_tool_args: dict | None = None, reply_reason: str = "", **kwargs,
     ):
-        check_items(items, item_schema_version)
+        settings = self.config.plugin
         args = reply_tool_args or {}
         notes = read_notes(args)
+        if not settings.inject_tool_facts and not settings.separate_reply_style and not notes:
+            return {"action": "continue"}
+        check_items(items, item_schema_version)
         instruction = notes["reference"] if notes else args.get("reply_reference", "")
         reason = notes["reason"] if notes else reply_reason
-        is_chat = kwargs.get("request_type", "maisaka.replyer") == "maisaka.replyer"
+        is_chat = settings.separate_reply_style and kwargs.get("request_type", "maisaka.replyer") == "maisaka.replyer"
         if not isinstance(instruction, str) or not isinstance(reply_reason, str):
             raise ValueError("Planner guidance must be text")
-        payload = json.dumps({
-            "instruction": instruction, "reason": reason,
-            "tool_results": self._facts.get(session_id, []),
-        }, ensure_ascii=False).replace("<", "\\u003c")
+        facts = {"tool_results": self._facts.get(session_id, []) if settings.inject_tool_facts else []}
+        if settings.separate_reply_style:
+            facts.update(instruction=instruction, reason=reason)
+        payload = json.dumps(facts, ensure_ascii=False).replace("<", "\\u003c")
         reminder = f"\n{NOTES_REMINDER}" if is_chat else ""
         block = f"<planner_instruction_and_facts>\n{payload}{reminder}\n</planner_instruction_and_facts>"
         updated = deepcopy(items)
@@ -167,7 +203,9 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
                 for part in item.get("parts", []):
                     if part.get("type") == "text" and notes["marker"] in part["text"]:
                         had_marker = True
-                        part["text"] = part["text"].replace(notes["marker"], "")
+                        # A style toggle during generation must restore the reference, never leak the marker.
+                        replacement = "" if settings.separate_reply_style else instruction or reason
+                        part["text"] = part["text"].replace(notes["marker"], replacement)
                 if not (had_marker and item.get("item_type") == "UserMessageItem" and all(
                     part.get("type") == "text" and not part["text"].strip() for part in item.get("parts", [])
                 )):
@@ -175,10 +213,11 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
             updated = cleaned
         # Keep the policy after existing system instructions and before chat content.
         position = next((i for i, item in enumerate(updated) if item.get("item_type") != "SystemMessageItem"), len(updated))
-        updated[position:position] = [
-            text_item("SystemMessageItem", FACTS_POLICY + (" " + STYLE_POLICY if is_chat else "")),
-            text_item("UserMessageItem", block),
-        ]
+        if settings.inject_tool_facts or settings.separate_reply_style:
+            updated[position:position] = [
+                text_item("SystemMessageItem", FACTS_POLICY + (" " + STYLE_POLICY if is_chat else "")),
+                text_item("UserMessageItem", block),
+            ]
         if is_chat:
             updated.append(text_item("UserMessageItem", CHAT_CUE))
         return {"action": "continue", "modified_kwargs": {
@@ -189,6 +228,8 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
     @HookHandler("maisaka.reply.before_post_process", name="preserve_generated_text",
                  mode=HookMode.BLOCKING, order=HookOrder.LATE)
     async def preserve_generated_text(self, **kwargs):
+        if not self.config.plugin.bypass_post_processing:
+            return {"action": "continue"}
         return {"action": "continue", "modified_kwargs": {
             **kwargs,
             "skip_post_process": True, "enable_splitter": False, "enable_chinese_typo": False,

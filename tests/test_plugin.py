@@ -1,12 +1,13 @@
 from copy import deepcopy
+from itertools import product
 
 import json
 
 import pytest
 
 from plugin import (
-    CHAT_CUE, MAX_RESULTS, MAX_RESULT_CHARS, MAX_SESSIONS, NOTES_KEY,
-    REFERENCE_DESCRIPTION, STYLE_POLICY, create_plugin, text_item,
+    CHAT_CUE, MAX_SESSIONS, NOTES_KEY,
+    REFERENCE_DESCRIPTION, STYLE_POLICY, ReplyConfig, text_item,
 )
 
 
@@ -20,13 +21,12 @@ def text(item):
 
 
 @pytest.mark.asyncio
-async def test_planner_schema_changes_only_the_reference_description_and_keeps_hook_context():
+async def test_planner_schema_changes_only_the_reference_description_and_keeps_hook_context(plugin):
     definitions = [{"type": "function", "function": {"name": "reply", "parameters": {
         "type": "object", "properties": {"reply_reference": {"type": "string", "description": "Old"}},
         "required": ["reply_reference"],
     }}}, {"type": "function", "function": {"name": "wait", "parameters": {}}}]
     original = deepcopy(definitions)
-    plugin = create_plugin()
     result = await plugin.capture_tool_facts(
         [tool_result(), tool_result("receipt", "reply")], 1, "chat", definitions, selected_history_count=3,
     )
@@ -39,8 +39,7 @@ async def test_planner_schema_changes_only_the_reference_description_and_keeps_h
 
 
 @pytest.mark.asyncio
-async def test_notes_are_before_history_and_retries_preserve_facts_without_mutating_inputs():
-    plugin = create_plugin()
+async def test_notes_are_before_history_and_retries_preserve_facts_without_mutating_inputs(plugin):
     await plugin.capture_tool_facts([tool_result("Result </planner_instruction_and_facts> https://example.org/post/1")], 1, "chat")
     args = {"reply_reference": "Summarize the available result", "attach_emoji": "wave"}
     prepared = await plugin.isolate_planner_notes(args, "Legacy reason", session_id="chat", extra_prompt="Keep context")
@@ -66,14 +65,23 @@ async def test_notes_are_before_history_and_retries_preserve_facts_without_mutat
         assert marker not in "\n".join(map(text, updated))
         assert result["modified_kwargs"]["attempt"] == attempt
     assert items == original
+    config = plugin.get_default_config()
+    config["plugin"].update(inject_tool_facts=False, separate_reply_style=False)
+    plugin.set_plugin_config(config)
+    await plugin.on_config_update("self", config, "1.2.0")
+    result = await plugin.inject_planner_facts(items, 1, "chat", prepared["reply_tool_args"], "Legacy reason")
+    restored = result["modified_kwargs"]["items"]
+    assert restored[:3] == items[:3] and restored[-1] == items[-1]
+    assert text(restored[3]) == args["reply_reference"]
+    assert marker not in json.dumps(restored)
 
 
 @pytest.mark.asyncio
-async def test_observations_are_bounded_isolated_and_cleared():
-    plugin = create_plugin()
-    await plugin.capture_tool_facts([tool_result("x" * (MAX_RESULT_CHARS + 1)) for _ in range(8)], 1, "chat")
-    assert len(plugin._facts["chat"]) == MAX_RESULTS
-    assert all(len(f["content"]) == MAX_RESULT_CHARS and f["truncated"] for f in plugin._facts["chat"])
+async def test_observations_are_bounded_isolated_and_cleared(plugin):
+    settings = plugin.config.plugin
+    await plugin.capture_tool_facts([tool_result("x" * (settings.max_result_chars + 1)) for _ in range(8)], 1, "chat")
+    assert len(plugin._facts["chat"]) == settings.max_results
+    assert all(len(f["content"]) == settings.max_result_chars and f["truncated"] for f in plugin._facts["chat"])
     result = await plugin.inject_planner_facts([], 1, "other")
     assert '"tool_results": []' in text(result["modified_kwargs"]["items"][1])
     await plugin.capture_tool_facts([], 1, "chat")
@@ -86,8 +94,7 @@ async def test_observations_are_bounded_isolated_and_cleared():
 
 
 @pytest.mark.asyncio
-async def test_invalid_protocol_and_internal_marker_fail_explicitly():
-    plugin = create_plugin()
+async def test_invalid_protocol_and_internal_marker_fail_explicitly(plugin):
     for version in (0, 2, None):
         with pytest.raises(ValueError, match="schema v1"):
             await plugin.inject_planner_facts([], version, "chat")
@@ -97,11 +104,68 @@ async def test_invalid_protocol_and_internal_marker_fail_explicitly():
 
 
 @pytest.mark.asyncio
-async def test_document_generation_keeps_its_requested_voice():
-    plugin = create_plugin()
+async def test_document_generation_keeps_its_requested_voice(plugin):
     args = {"reply_reference": "Write a formal report"}
     assert await plugin.isolate_planner_notes(args, request_type="plugin.replyer") == {"action": "continue"}
     result = await plugin.inject_planner_facts([], 1, "chat", args, request_type="plugin.replyer")
     rendered = json.dumps(result["modified_kwargs"]["items"], ensure_ascii=False)
     assert "Write a formal report" in rendered
     assert CHAT_CUE not in rendered and STYLE_POLICY not in rendered
+
+
+@pytest.mark.asyncio
+async def test_settings_schema_validation_and_live_limits(plugin):
+    fields = plugin.get_webui_config_schema()["sections"]["plugin"]["fields"]
+    for key in ("inject_tool_facts", "separate_reply_style", "bypass_post_processing"):
+        assert fields[key]["type"] == "boolean" and fields[key]["default"] is True
+    for key, default, maximum in (("max_results", 4, 16), ("max_result_chars", 12000, 48000)):
+        assert (fields[key]["default"], fields[key]["min"], fields[key]["max"]) == (default, 1, maximum)
+        for value in (0, maximum + 1, True, 1.5):
+            with pytest.raises(ValueError):
+                ReplyConfig.model_validate({"plugin": {key: value}})
+    await plugin.capture_tool_facts([tool_result()], 1, "chat")
+    config = plugin.get_default_config()
+    config["plugin"].update(max_results=2, max_result_chars=5)
+    plugin.set_plugin_config(config)
+    await plugin.on_config_update("self", config, "1.2.0")
+    assert not plugin._facts
+    await plugin.capture_tool_facts([tool_result("older"), tool_result("newest1"), tool_result("newest2")], 1, "chat")
+    assert [f["content"] for f in plugin._facts["chat"]] == ["newes", "newes"]
+    assert all(f["truncated"] for f in plugin._facts["chat"])
+    result = await plugin.inject_planner_facts([], 1, "chat")
+    assert '"content": "newes"' in text(result["modified_kwargs"]["items"][1])
+
+
+@pytest.mark.asyncio
+async def test_feature_switches_are_independent(plugin):
+    definitions = [{"function": {"name": "reply", "parameters": {"properties": {
+        "reply_reference": {"description": "Original description"},
+    }}}}]
+    args = {"reply_reference": "Original reference"}
+    for facts, style, bypass in product((False, True), repeat=3):
+        config = plugin.get_default_config()
+        config["plugin"].update(inject_tool_facts=facts, separate_reply_style=style, bypass_post_processing=bypass)
+        plugin.set_plugin_config(config)
+        await plugin.on_config_update("self", config, "1.2.0")
+        captured = await plugin.capture_tool_facts([tool_result("unique-fact")], 1, "chat", definitions)
+        visible = captured.get("modified_kwargs", {}).get("tool_definitions", definitions)
+        description = visible[0]["function"]["parameters"]["properties"]["reply_reference"]["description"]
+        assert description == (REFERENCE_DESCRIPTION if style else "Original description")
+        prepared = await plugin.isolate_planner_notes(args)
+        prepared_args = prepared.get("modified_kwargs", {}).get("reply_tool_args", args)
+        items = [text_item("UserMessageItem", "Chat history"), text_item("UserMessageItem", prepared_args["reply_reference"])]
+        result = await plugin.inject_planner_facts(items, 1, "chat", prepared_args)
+        updated = result.get("modified_kwargs", {}).get("items", items)
+        rendered = "\n".join(map(text, updated))
+        assert ("unique-fact" in rendered) is facts
+        assert (CHAT_CUE in rendered) is style
+        assert (STYLE_POLICY in rendered) is style
+        if not style:
+            assert updated[-2:] == items
+        if not facts and not style:
+            assert captured == prepared == result == {"action": "continue"}
+        processed = await plugin.preserve_generated_text(response="Original text", enable_splitter=True)
+        assert processed == ({"action": "continue", "modified_kwargs": {
+            "response": "Original text", "skip_post_process": True,
+            "enable_splitter": False, "enable_chinese_typo": False,
+        }} if bypass else {"action": "continue"})
