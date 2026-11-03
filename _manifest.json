@@ -1,24 +1,24 @@
 {
   "manifest_version": 2,
   "id": "github.zerlight.reply-integrity",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "name": "Reply Integrity",
   "description": "保留 Planner 事实、隔离草稿文风，让回复器按聊天语气表达。",
   "author": {
-    "name": "Reply Integrity",
-    "url": "https://github.com/Zerlight/maibot-reply-integrity"
+    "name": "Zerlight",
+    "url": "https://github.com/Zerlight"
   },
   "license": "MIT",
   "urls": {
     "repository": "https://github.com/Zerlight/maibot-reply-integrity"
   },
   "host_application": {
-    "min_version": "1.3.19",
+    "min_version": "1.2.0",
     "max_version": "1.3.19"
   },
   "sdk": {
-    "min_version": "2.20.0",
-    "max_version": "2.20.0"
+    "min_version": "2.7.1",
+    "max_version": "2.21.0"
   },
   "dependencies": [],
   "capabilities": [],

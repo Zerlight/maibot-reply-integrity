@@ -6,12 +6,17 @@ pytest.importorskip("src")
 
 from plugin import CHAT_CUE
 from src.chat.replyer.maisaka_generator_base import BaseMaisakaReplyGenerator
+from src.config.config import global_config
 from src.llm_models.payload_content.context_item import ContextItemBuilder, RoleType, get_item_text
 from src.plugin_runtime.hook_payloads import deserialize_prompt_items, serialize_prompt_items
 
 
 @pytest.mark.asyncio
 async def test_real_host_prompt_builder_has_no_trailing_planner_draft(monkeypatch, plugin):
+    for section in ("experimental", "debug"):
+        config = getattr(global_config, section, None)
+        if hasattr(config, "replyer_retro_prompt"):
+            monkeypatch.setattr(config, "replyer_retro_prompt", False)
     history = [ContextItemBuilder().set_role(RoleType.User).add_text_content("查到了吗？").build()]
     generator = object.__new__(BaseMaisakaReplyGenerator)
     for name, value in {
@@ -19,7 +24,7 @@ async def test_real_host_prompt_builder_has_no_trailing_planner_draft(monkeypatc
         "_build_system_prompt": "Persona", "_build_final_user_message": "Answer the question",
         "_select_temporary_reply_style": "", "_build_history_messages": history,
     }.items():
-        monkeypatch.setattr(generator, name, lambda *a, _value=value, **kw: _value)
+        monkeypatch.setattr(generator, name, lambda *a, _value=value, **kw: _value, raising=name != "_uses_retro_prompt")
     await plugin.capture_tool_facts([{
         "item_type": "FunctionCallOutputItem", "tool_name": "x_search_result", "call_id": "test-call",
         "output": "Found demo_handle https://example.org/post/1", "success": True,
