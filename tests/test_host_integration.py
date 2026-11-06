@@ -39,7 +39,8 @@ async def test_real_host_prompt_builder_has_no_trailing_planner_draft(monkeypatc
     restored = deserialize_prompt_items(result["modified_kwargs"]["items"], item_schema_version=1, original_items=original)
     texts = [get_item_text(item) for item in restored]
     assert restored[0] is original[0] and restored[3] is history[0]
-    assert "The available evidence" in texts[2] and "Legacy summary" in texts[2]
+    assert "The available evidence" in texts[2]
+    assert not any("Legacy summary" in t for t in texts)
     assert "https://example.org/post/1" in texts[2]
     assert not any("The available evidence" in t or "Legacy summary" in t for t in texts[3:])
     assert texts[-1] == CHAT_CUE and prepared["reply_reference"] not in "\n".join(texts)

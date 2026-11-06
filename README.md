@@ -81,7 +81,7 @@ flowchart TD
 
 1. 将本仓库目录放入 MaiBot 实例的 `plugins/reply_integrity/`。
 2. 在插件管理器中加载或重载 **Reply Integrity**（插件固定 ID 为 `github.zerlight.reply-integrity`）。
-3. 查看运行日志，确认出现 `Reply Integrity 1.3.1 hooks active`。
+3. 查看运行日志，确认出现 `Reply Integrity 1.3.2 hooks active`。
 
 ### 推荐搭配：关闭宿主“回复后处理”总开关
 
@@ -96,6 +96,7 @@ enable_response_post_process = false
 
 ### 升级与卸载
 
+- **升级至 1.3.2**：保留现有设置，新增 `force_reply_reason = false`。默认不再将 Planner 正文与明确的回复参考一起注入；需要此行为时可手动开启「强制注入 reply_reason」（须同时开启文风隔离）。
 - **升级至 1.3.0**：插件会自动迁移配置，移除已废弃的 `bypass_post_processing` 字段并保留其余设置。自 1.3.0 起，回复后处理完全交由宿主配置控制；若此前依赖插件跳过后处理，请按上一节说明关闭宿主的「回复后处理」总开关。
 - **禁用或卸载**：禁用或卸载后立即停止提示词注入并清空内存中的工具结果缓存，不会修改任何宿主配置。
 
@@ -107,6 +108,7 @@ enable_response_post_process = false
 | :--- | :--- | :--- |
 | `inject_tool_facts` | `true` | 是否捕获当前 Planner 上下文可见的最近工具结果并注入给 Replier。 |
 | `separate_reply_style` | `true` | 是否改写 Planner 参数说明、前置后台参考并追加末尾口语提示。 |
+| `force_reply_reason` | `false` | 仅在 `separate_reply_style = true` 时生效：已有非空 `reply_reference` 时仍额外注入非空 `reply_reason`，可能增加复述后台正文的风险。 |
 | `max_results` | `4` | 每个会话注入的最近工具结果条数（范围 **1–16**，不含 `reply` 工具回执）。 |
 | `max_result_chars` | `12000` | 单条工具结果的字符上限（范围 **1–48,000**），超出部分自动截断并附带标记。 |
 
@@ -121,6 +123,8 @@ enable_response_post_process = false
 | `maisaka.planner.before_request` | 按配置捕获当前上下文中最近的工具结果（不含 `reply`）；开启文风隔离时，重写 `reply` 工具中 `reply_reference` 参数的 Schema 说明，要求仅填关键词、要点与核心事实。 |
 | `maisaka.replyer.before_request` | 将原始参考与回复原因暂存至当次调用的内部字段，并用一次性标记替换原字段，防止宿主在聊天历史末尾重复拼接后台草稿；重试时自动复用同一记录。 |
 | `maisaka.replyer.before_model_request` | 清理临时标记，将 `<planner_instruction_and_facts>` 数据块插入在系统规则之后、聊天历史之前；若为常规聊天请求，还在上下文末尾追加简短口语提示。 |
+
+默认优先使用非空的 `reply_reference`，仅在它为空时沿用宿主的 `reply_reason` 回退。开启 `force_reply_reason` 后，在文风隔离生效时额外注入非空正文；参考为空时仍只保留一次回退内容，宿主未提供正文时不会凭空补充。若 Planner 将推理过程或完整草稿写进 `reply_reference` 本身，插件无法可靠区分并自动删去，仍需检查该字段及回复模型的实际表现。
 
 ### 2. 上下文排布对比（消除近因效应）
 
@@ -166,6 +170,11 @@ python -m pytest -q tests
 *所有测试均使用合成数据，不会发起真实模型调用或向外发送消息。*
 
 ## 更新记录
+
+### 1.3.2
+
+- 默认遵循宿主的参考优先级，避免已有 `reply_reference` 时再次注入 Planner 正文。
+- 新增 SDK 设置 `force_reply_reason`（默认关闭），允许在文风隔离开启时额外传入非空正文；空参考的回退内容不会重复注入。
 
 ### 1.3.1
 

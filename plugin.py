@@ -50,7 +50,7 @@ class ReplySettings(PluginConfigBase):
     __ui_label__ = "回复完整性"
     __ui_i18n__ = {"en_US": {"title": "Reply Integrity"}}
 
-    config_version: str = Field(default="1.3.0", description="配置版本", json_schema_extra={"hidden": True})
+    config_version: str = Field(default="1.3.2", description="配置版本", json_schema_extra={"hidden": True})
     enabled: bool = Field(default=True, description="启用插件", json_schema_extra={
         "label": "启用插件", "i18n": {"en_US": {"label": "Enable plugin"}},
     })
@@ -59,6 +59,9 @@ class ReplySettings(PluginConfigBase):
     })
     separate_reply_style: bool = Field(default=True, strict=True, description="要求 Planner 提供要点，前置参考并追加口语提示。", json_schema_extra={
         "label": "隔离 Planner 文风", "i18n": {"en_US": {"label": "Separate reply style", "hint": "Request brief notes, move them before history and add a conversational cue."}},
+    })
+    force_reply_reason: bool = Field(default=False, strict=True, description="仅在隔离 Planner 文风开启时生效：已有回复参考时仍额外注入非空 reply_reason，可能增加复述后台正文的风险。", json_schema_extra={
+        "label": "强制注入 reply_reason", "i18n": {"en_US": {"label": "Force reply_reason injection", "hint": "Requires Separate reply style. Include a nonempty reply_reason alongside an explicit reference; may increase copying of background notes."}},
     })
     max_results: int = Field(default=4, ge=1, le=16, strict=True, description="每个会话注入的最近工具结果数（1–16）。", json_schema_extra={
         "label": "工具结果数量", "step": 1, "i18n": {"en_US": {"label": "Tool result count", "hint": "Recent results per session (1–16)."}},
@@ -108,7 +111,7 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
         self._facts: OrderedDict[str, list[dict]] = OrderedDict()
 
     async def on_load(self) -> None:
-        self.ctx.logger.info("Reply Integrity 1.3.1 hooks active")
+        self.ctx.logger.info("Reply Integrity 1.3.2 hooks active")
 
     async def on_unload(self) -> None:
         self._facts.clear()
@@ -191,11 +194,14 @@ class ReplyIntegrityPlugin(MaiBotPlugin):
         instruction = notes["reference"] if notes else args.get("reply_reference", "")
         reason = notes["reason"] if notes else reply_reason
         is_chat = settings.separate_reply_style and kwargs.get("request_type", "maisaka.replyer") == "maisaka.replyer"
-        if not isinstance(instruction, str) or not isinstance(reply_reason, str):
+        if not isinstance(instruction, str) or not isinstance(reason, str):
             raise ValueError("Planner guidance must be text")
         facts = {"tool_results": self._facts.get(session_id, []) if settings.inject_tool_facts else []}
         if settings.separate_reply_style:
-            facts.update(instruction=instruction, reason=reason)
+            # Match Host precedence unless the optional raw-body injection is enabled.
+            facts["instruction"] = instruction.strip() or reason.strip()
+            if settings.force_reply_reason and instruction.strip() and reason.strip():
+                facts["reason"] = reason.strip()
         payload = json.dumps(facts, ensure_ascii=False).replace("<", "\\u003c")
         reminder = f"\n{NOTES_REMINDER}" if is_chat else ""
         block = f"<planner_instruction_and_facts>\n{payload}{reminder}\n</planner_instruction_and_facts>"

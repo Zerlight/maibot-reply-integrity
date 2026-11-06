@@ -81,7 +81,7 @@ Asynchronous MCP searches require distinguishing between a request that is still
 
 1. Copy this directory into your MaiBot instance at `plugins/reply_integrity/`.
 2. Load or reload **Reply Integrity** in the plugin manager (plugin ID: `github.zerlight.reply-integrity`).
-3. Check the logs for `Reply Integrity 1.3.1 hooks active`.
+3. Check the logs for `Reply Integrity 1.3.2 hooks active`.
 
 ### Recommended: Disable Host Response Post-Processing
 
@@ -96,6 +96,7 @@ In MaiBot `1.3.19`, disabling this master switch returns the Replier's generated
 
 ### Upgrading & Uninstalling
 
+- **Upgrading to 1.3.2**: Existing settings are preserved and `force_reply_reason = false` is added. The Planner body is no longer injected alongside an explicit reply reference by default. Enable **Force reply_reason injection** to include it (requires style separation).
 - **Upgrading to 1.3.0**: Configuration migration automatically removes the deprecated `bypass_post_processing` field while preserving your remaining settings. Response post-processing is now governed entirely by the Host; if you previously relied on the plugin's post-processing bypass, disable the Host's global switch as shown above.
 - **Disabling or unloading**: Immediately stops prompt injection for future requests and clears the in-memory tool result cache without altering Host configuration files.
 
@@ -107,6 +108,7 @@ Select **Reply Integrity** on MaiBot WebUI's plugin configuration page. The SDK 
 | :--- | :--- | :--- |
 | `inject_tool_facts` | `true` | Capture recent tool outputs visible to the current Planner request and inject them into the Replier context. |
 | `separate_reply_style` | `true` | Rewrite the Planner's `reply_reference` schema description, relocate notes before chat history, and append a conversational cue. |
+| `force_reply_reason` | `false` | Requires `separate_reply_style = true`: also inject a nonempty `reply_reason` when `reply_reference` is nonempty. May increase copying of background notes. |
 | `max_results` | `4` | Number of recent tool outputs per session (**1–16**, excluding `reply` tool receipts). |
 | `max_result_chars` | `12000` | Maximum characters per tool output (**1–48,000**); longer outputs are truncated and flagged. |
 
@@ -121,6 +123,8 @@ Select **Reply Integrity** on MaiBot WebUI's plugin configuration page. The SDK 
 | `maisaka.planner.before_request` | Captures recent non-`reply` tool outputs from the active context (when enabled) and rewrites the `reply_reference` parameter description on the `reply` tool to ask for concise bullet points and core facts. |
 | `maisaka.replyer.before_request` | Stashes the original reference and reason in an internal per-call field and swaps in a one-time marker so the Host does not append the raw draft after chat history (preserving retry idempotency). |
 | `maisaka.replyer.before_model_request` | Strips the temporary marker, inserts the `<planner_instruction_and_facts>` block after system rules and before chat history, and appends a brief conversational cue at the end of normal chat requests. |
+
+By default, reply guidance uses a nonempty `reply_reference` first and falls back to `reply_reason` only when it is empty, following the Host's precedence. With style separation active, `force_reply_reason` additionally includes the nonempty body. An empty reference still produces only one fallback copy, and the plugin cannot supply a body the Host did not provide. If the Planner puts reasoning or a complete draft inside `reply_reference` itself, the plugin cannot reliably identify and remove it; inspect that field and the Replier's actual output.
 
 ### 2. Context Layout Comparison (Neutralizing Recency Bias)
 
@@ -166,6 +170,11 @@ python -m pytest -q tests
 *All tests use synthetic fixtures and never invoke external models or send live messages.*
 
 ## Changelog
+
+### 1.3.2
+
+- Follow the Host's reference precedence by default, avoiding extra Planner-body injection when `reply_reference` is present.
+- Add the SDK setting `force_reply_reason` (default off) to include a nonempty body when style separation is enabled; an empty reference does not duplicate the fallback content.
 
 ### 1.3.1
 
